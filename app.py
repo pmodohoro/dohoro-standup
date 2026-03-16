@@ -19,6 +19,10 @@ STANDUP_HOUR = int(os.environ.get("STANDUP_HOUR", "7"))
 STANDUP_MINUTE = int(os.environ.get("STANDUP_MINUTE", "20"))
 STANDUP_WINDOW_MINUTES = int(os.environ.get("STANDUP_WINDOW", "45"))
 
+# Add members by their Slack display name, comma separated
+# Example: "Ram Sharma,Sita Thapa,Hari Prasad"
+ALLOWED_MEMBERS = os.environ.get("ALLOWED_MEMBERS", "")
+
 QUESTIONS = [
     "👋 Good morning! Time for your daily standup!\n\n*Question 1 of 3:* ✅ What did you complete yesterday?",
     "*Question 2 of 3:* 🔨 What will you work on today?",
@@ -28,6 +32,11 @@ QUESTIONS = [
 user_sessions = {}
 sessions_lock = threading.Lock()
 excel_lock = threading.Lock()
+
+def get_allowed_names():
+    if not ALLOWED_MEMBERS.strip():
+        return []
+    return [n.strip().lower() for n in ALLOWED_MEMBERS.split(",") if n.strip()]
 
 def get_excel_filepath():
     now = datetime.now(NPT)
@@ -130,7 +139,7 @@ def close_standup():
         try:
             client.chat_postMessage(
                 channel=dm_channel,
-                text=f"⏰ Standup is now closed ({close_hour}:{close_min:02d}am deadline reached). Your response was not recorded. Please submit on time tomorrow!"
+                text=f"⏰ Standup is now closed ({close_hour}:{close_min:02d} deadline reached). Your response was not recorded. Please submit on time tomorrow!"
             )
         except SlackApiError:
             pass
@@ -142,13 +151,24 @@ def close_standup():
 
 def send_standup_prompts():
     print(f"Sending standup prompts at {datetime.now(NPT).strftime('%H:%M NPT')}")
+    allowed_names = get_allowed_names()
+    
     try:
         result = client.users_list()
+        sent_count = 0
         for user in result["members"]:
             if user.get("is_bot") or user.get("deleted") or user.get("is_app_user"):
                 continue
             if user["id"] == "USLACKBOT":
                 continue
+
+            # If allowed list is set, only DM those users
+            if allowed_names:
+                user_name_check = user.get("real_name", user.get("name", "")).lower()
+                if user_name_check not in allowed_names:
+                    print(f"Skipping {user.get('real_name')} — not in allowed list")
+                    continue
+
             user_id = user["id"]
             try:
                 dm = client.conversations_open(users=user_id)
@@ -164,8 +184,11 @@ def send_standup_prompts():
                     channel=dm_channel,
                     text=QUESTIONS[0]
                 )
+                sent_count += 1
+                print(f"Sent to: {user.get('real_name')}")
             except SlackApiError as e:
                 print(f"Error DMing user {user_id}: {e}")
+        print(f"Standup sent to {sent_count} members!")
     except SlackApiError as e:
         print(f"Error fetching users: {e}")
 
@@ -223,13 +246,26 @@ def slack_events():
 @app.route("/", methods=["GET"])
 def home():
     close_hour, close_min = get_close_time()
+    allowed_names = get_allowed_names()
+    members_info = f"{len(allowed_names)} specific members" if allowed_names else "ALL workspace members"
     return (
         f"Dohoro Standup Bot is running! ☕<br><br>"
         f"Channel: #{CHANNEL_NAME}<br>"
-        f"Standup opens: {STANDUP_HOUR}:{STANDUP_MINUTE:02d}am NPT<br>"
-        f"Standup closes: {close_hour}:{close_min:02d}am NPT<br>"
-        f"Window: {STANDUP_WINDOW_MINUTES} minutes"
+        f"Standup opens: {STANDUP_HOUR}:{STANDUP_MINUTE:02d} NPT<br>"
+        f"Standup closes: {close_hour}:{close_min:02d} NPT<br>"
+        f"Window: {STANDUP_WINDOW_MINUTES} minutes<br>"
+        f"Members: {members_info}"
     )
+
+@app.route("/members", methods=["GET"])
+def list_members():
+    allowed_names = get_allowed_names()
+    if not allowed_names:
+        return "No specific members set — bot will DM ALL workspace members."
+    result = "<b>Allowed standup members:</b><br><br>"
+    for i, email in enumerate(allowed_names, 1):
+        result += f"{i}. {email}<br>"
+    return result
 
 @app.route("/trigger", methods=["GET"])
 def trigger():
