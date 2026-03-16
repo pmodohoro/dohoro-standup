@@ -13,7 +13,7 @@ import pytz
 app = Flask(__name__)
 client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 
-CHANNEL_NAME = "drive_new"
+CHANNEL_NAME = "wpx--todos"
 NPT = pytz.timezone("Asia/Kathmandu")
 
 user_sessions = {}
