@@ -325,7 +325,14 @@ def start_scheduler():
     print(f"✅ Standup closes: {close_hour}:{close_min:02d} NPT")
     print(f"✅ Keep alive: every 5 minutes")
 
-start_scheduler()
+import atexit
+
+def initialize():
+    if not os.environ.get("SCHEDULER_STARTED"):
+        os.environ["SCHEDULER_STARTED"] = "1"
+        start_scheduler()
+
+initialize()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
