@@ -211,15 +211,6 @@ def slack_events():
             with sessions_lock:
                 session = user_sessions.get(user_id)
             if session and session["channel"] == channel:
-                if not is_standup_open():
-                    try:
-                        client.chat_postMessage(
-                            channel=channel,
-                            text="⏰ Sorry, the standup window is now closed. Please submit on time tomorrow!"
-                        )
-                    except SlackApiError:
-                        pass
-                    return jsonify({"status": "ok"})
                 with sessions_lock:
                     session["answers"].append(text)
                     session["step"] += 1
