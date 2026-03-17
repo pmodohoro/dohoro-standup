@@ -1,5 +1,6 @@
 import os
 import threading
+import requests
 from datetime import datetime, timedelta
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -18,10 +19,8 @@ CHANNEL_NAME = os.environ.get("SLACK_CHANNEL", "wpx--todos")
 STANDUP_HOUR = int(os.environ.get("STANDUP_HOUR", "7"))
 STANDUP_MINUTE = int(os.environ.get("STANDUP_MINUTE", "20"))
 STANDUP_WINDOW_MINUTES = int(os.environ.get("STANDUP_WINDOW", "45"))
-
-# Add members by their Slack display name, comma separated
-# Example: "Ram Sharma,Sita Thapa,Hari Prasad"
 ALLOWED_MEMBERS = os.environ.get("ALLOWED_MEMBERS", "")
+RENDER_URL = os.environ.get("RENDER_URL", "https://dohoro-standup.onrender.com")
 
 QUESTIONS = [
     "👋 Good morning! Time for your daily standup!\n\n*Question 1 of 3:* ✅ What did you complete yesterday?",
@@ -32,6 +31,13 @@ QUESTIONS = [
 user_sessions = {}
 sessions_lock = threading.Lock()
 excel_lock = threading.Lock()
+
+def keep_alive():
+    try:
+        requests.get(RENDER_URL, timeout=10)
+        print(f"✅ Keep alive ping sent at {datetime.now(NPT).strftime('%H:%M NPT')}")
+    except Exception as e:
+        print(f"Keep alive failed: {e}")
 
 def get_allowed_names():
     if not ALLOWED_MEMBERS.strip():
@@ -62,59 +68,62 @@ def save_to_excel(user_name, answers, did_not_submit=False):
             ws.append([date_str, user_name, answers[0], answers[1], blockers, "Submitted"])
         wb.save(filepath)
 
-def get_channel_id():
+def get_channel_ids():
+    channel_names = [c.strip() for c in CHANNEL_NAME.split(",") if c.strip()]
+    found_ids = []
     try:
         result = client.conversations_list(types="public_channel,private_channel")
         for ch in result["channels"]:
-            if ch["name"] == CHANNEL_NAME:
-                return ch["id"]
+            if ch["name"] in channel_names:
+                found_ids.append(ch["id"])
     except SlackApiError as e:
-        print(f"Error getting channel: {e}")
-    return None
+        print(f"Error getting channels: {e}")
+    return found_ids
 
 def post_to_channel(user_name, user_id, answers):
-    try:
-        channel_id = get_channel_id()
-        if not channel_id:
-            print(f"Channel #{CHANNEL_NAME} not found!")
-            return
-        blockers = answers[2] if answers[2].lower() != "none" else "-"
-        client.chat_postMessage(
-            channel=channel_id,
-            text=f"<@{user_id}> submitted standup *DOHORO-STANDUP* ☕☕☕",
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"<@{user_id}> submitted standup *DOHORO-STANDUP* ☕☕☕"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*What did you complete yesterday?*\n• {answers[0]}"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*What will you do today?*\n• {answers[1]}"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*Anything blocking your progress?*\n{blockers}"}
-                }
-            ]
-        )
-    except SlackApiError as e:
-        print(f"Error posting to channel: {e}")
+    channel_ids = get_channel_ids()
+    if not channel_ids:
+        print(f"No channels found for: {CHANNEL_NAME}")
+        return
+    blockers = answers[2] if answers[2].lower() != "none" else "-"
+    for channel_id in channel_ids:
+        try:
+            client.chat_postMessage(
+                channel=channel_id,
+                text=f"<@{user_id}> submitted standup *DOHORO-STANDUP* ☕☕☕",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"<@{user_id}> submitted standup *DOHORO-STANDUP* ☕☕☕"}
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"*What did you complete yesterday?*\n• {answers[0]}"}
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"*What will you do today?*\n• {answers[1]}"}
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"*Anything blocking your progress?*\n{blockers}"}
+                    }
+                ]
+            )
+            print(f"✅ Posted to channel: {channel_id}")
+        except SlackApiError as e:
+            print(f"Error posting to channel {channel_id}: {e}")
 
 def post_did_not_submit(user_name, user_id):
-    try:
-        channel_id = get_channel_id()
-        if not channel_id:
-            return
-        client.chat_postMessage(
-            channel=channel_id,
-            text=f"⚠️ <@{user_id}> did not submit standup today."
-        )
-    except SlackApiError as e:
-        print(f"Error posting missed standup: {e}")
+    channel_ids = get_channel_ids()
+    for channel_id in channel_ids:
+        try:
+            client.chat_postMessage(
+                channel=channel_id,
+                text=f"⚠️ <@{user_id}> did not submit standup today."
+            )
+        except SlackApiError as e:
+            print(f"Error posting missed standup: {e}")
 
 def get_close_time():
     close_min = STANDUP_MINUTE + STANDUP_WINDOW_MINUTES
@@ -152,7 +161,6 @@ def close_standup():
 def send_standup_prompts():
     print(f"Sending standup prompts at {datetime.now(NPT).strftime('%H:%M NPT')}")
     allowed_names = get_allowed_names()
-    
     try:
         result = client.users_list()
         sent_count = 0
@@ -161,14 +169,11 @@ def send_standup_prompts():
                 continue
             if user["id"] == "USLACKBOT":
                 continue
-
-            # If allowed list is set, only DM those users
             if allowed_names:
                 user_name_check = user.get("real_name", user.get("name", "")).lower()
                 if user_name_check not in allowed_names:
                     print(f"Skipping {user.get('real_name')} — not in allowed list")
                     continue
-
             user_id = user["id"]
             try:
                 dm = client.conversations_open(users=user_id)
@@ -185,7 +190,7 @@ def send_standup_prompts():
                     text=QUESTIONS[0]
                 )
                 sent_count += 1
-                print(f"Sent to: {user.get('real_name')}")
+                print(f"✅ Sent to: {user.get('real_name')}")
             except SlackApiError as e:
                 print(f"Error DMing user {user_id}: {e}")
         print(f"Standup sent to {sent_count} members!")
@@ -254,7 +259,8 @@ def home():
         f"Standup opens: {STANDUP_HOUR}:{STANDUP_MINUTE:02d} NPT<br>"
         f"Standup closes: {close_hour}:{close_min:02d} NPT<br>"
         f"Window: {STANDUP_WINDOW_MINUTES} minutes<br>"
-        f"Members: {members_info}"
+        f"Members: {members_info}<br><br>"
+        f"Bot is alive and will never sleep! ✅"
     )
 
 @app.route("/members", methods=["GET"])
@@ -263,8 +269,8 @@ def list_members():
     if not allowed_names:
         return "No specific members set — bot will DM ALL workspace members."
     result = "<b>Allowed standup members:</b><br><br>"
-    for i, email in enumerate(allowed_names, 1):
-        result += f"{i}. {email}<br>"
+    for i, name in enumerate(allowed_names, 1):
+        result += f"{i}. {name}<br>"
     return result
 
 @app.route("/trigger", methods=["GET"])
@@ -282,18 +288,31 @@ def manual_close():
 def start_scheduler():
     close_hour, close_min = get_close_time()
     scheduler = BackgroundScheduler(timezone=NPT)
+
+    # Send standup at configured time
     scheduler.add_job(
         send_standup_prompts, "cron",
         day_of_week="sun,mon,tue,wed,thu,fri",
         hour=STANDUP_HOUR, minute=STANDUP_MINUTE
     )
+
+    # Close standup after window
     scheduler.add_job(
         close_standup, "cron",
         day_of_week="sun,mon,tue,wed,thu,fri",
         hour=close_hour, minute=close_min
     )
+
+    # Keep alive ping every 5 minutes so bot never sleeps!
+    scheduler.add_job(
+        keep_alive, "interval", minutes=5
+    )
+
     scheduler.start()
-    print(f"✅ Scheduler started! Opens: {STANDUP_HOUR}:{STANDUP_MINUTE:02d}, Closes: {close_hour}:{close_min:02d} NPT")
+    print(f"✅ Scheduler started!")
+    print(f"✅ Standup opens: {STANDUP_HOUR}:{STANDUP_MINUTE:02d} NPT")
+    print(f"✅ Standup closes: {close_hour}:{close_min:02d} NPT")
+    print(f"✅ Keep alive: every 5 minutes")
 
 if __name__ == "__main__":
     start_scheduler()
