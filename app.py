@@ -314,6 +314,8 @@ def start_scheduler():
     print(f"✅ Standup closes: {close_hour}:{close_min:02d} NPT")
     print(f"✅ Keep alive: every 5 minutes")
 
+# Start scheduler when app loads (works with gunicorn too)
+start_scheduler()
+
 if __name__ == "__main__":
-    start_scheduler()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
