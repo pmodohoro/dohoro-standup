@@ -327,6 +327,18 @@ def start_scheduler():
 
 import atexit
 
+@app.route("/download", methods=["GET"])
+def download_excel():
+    filepath = get_excel_filepath()
+    try:
+        return send_file(
+            filepath,
+            as_attachment=True,
+            download_name=f"standup_{datetime.now(NPT).strftime('%B-%Y')}.xlsx"
+        )
+    except FileNotFoundError:
+        return "No Excel file found yet. Standup data will appear here after first submission!", 404
+
 def initialize():
     if not os.environ.get("SCHEDULER_STARTED"):
         os.environ["SCHEDULER_STARTED"] = "1"
