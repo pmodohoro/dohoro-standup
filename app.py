@@ -1,4 +1,5 @@
 import os
+import json
 import threading
 import requests
 from datetime import datetime, timedelta
@@ -18,9 +19,13 @@ NPT = pytz.timezone("Asia/Kathmandu")
 CHANNEL_NAME = os.environ.get("SLACK_CHANNEL", "wpx--todos")
 STANDUP_HOUR = int(os.environ.get("STANDUP_HOUR", "7"))
 STANDUP_MINUTE = int(os.environ.get("STANDUP_MINUTE", "20"))
-STANDUP_WINDOW_MINUTES = int(os.environ.get("STANDUP_WINDOW", "45"))
+STANDUP_WINDOW_MINUTES = int(os.environ.get("STANDUP_WINDOW", "30"))
 ALLOWED_MEMBERS = os.environ.get("ALLOWED_MEMBERS", "")
 RENDER_URL = os.environ.get("RENDER_URL", "https://dohoro-standup.onrender.com")
+
+SESSIONS_FILE = "/tmp/sessions.json"
+EXCEL_LOCK = threading.Lock()
+SESSIONS_LOCK = threading.Lock()
 
 QUESTIONS = [
     "👋 Good morning! Time for your daily standup!\n\n*Question 1 of 3:* ✅ What did you complete yesterday?",
@@ -28,14 +33,42 @@ QUESTIONS = [
     "*Question 3 of 3:* 🚧 Anything blocking your progress? (Type 'none' if nothing)"
 ]
 
-user_sessions = {}
-sessions_lock = threading.Lock()
-excel_lock = threading.Lock()
+def load_sessions():
+    try:
+        with open(SESSIONS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_sessions(sessions):
+    with open(SESSIONS_FILE, "w") as f:
+        json.dump(sessions, f)
+
+def get_session(user_id):
+    with SESSIONS_LOCK:
+        sessions = load_sessions()
+        return sessions.get(user_id)
+
+def set_session(user_id, data):
+    with SESSIONS_LOCK:
+        sessions = load_sessions()
+        sessions[user_id] = data
+        save_sessions(sessions)
+
+def delete_session(user_id):
+    with SESSIONS_LOCK:
+        sessions = load_sessions()
+        sessions.pop(user_id, None)
+        save_sessions(sessions)
+
+def get_all_sessions():
+    with SESSIONS_LOCK:
+        return load_sessions()
 
 def keep_alive():
     try:
         requests.get(RENDER_URL, timeout=10)
-        print(f"✅ Keep alive ping sent at {datetime.now(NPT).strftime('%H:%M NPT')}")
+        print(f"✅ Keep alive ping at {datetime.now(NPT).strftime('%H:%M NPT')}")
     except Exception as e:
         print(f"Keep alive failed: {e}")
 
@@ -52,7 +85,7 @@ def save_to_excel(user_name, answers, did_not_submit=False):
     filepath = get_excel_filepath()
     now = datetime.now(NPT)
     date_str = now.strftime("%Y-%m-%d")
-    with excel_lock:
+    with EXCEL_LOCK:
         try:
             wb = load_workbook(filepath)
             ws = wb.active
@@ -131,36 +164,29 @@ def get_close_time():
     close_min = close_min % 60
     return close_hour, close_min
 
-def is_standup_open():
-    now = datetime.now(NPT)
-    open_time = now.replace(hour=STANDUP_HOUR, minute=STANDUP_MINUTE, second=0, microsecond=0)
-    close_time = open_time + timedelta(minutes=STANDUP_WINDOW_MINUTES)
-    return open_time <= now <= close_time
-
 def close_standup():
     close_hour, close_min = get_close_time()
     print(f"Closing standup at {close_hour}:{close_min:02d} NPT")
-    with sessions_lock:
-        unfinished = list(user_sessions.items())
-    for user_id, session in unfinished:
+    sessions = get_all_sessions()
+    for user_id, session in sessions.items():
         user_name = session["name"]
         dm_channel = session["channel"]
         try:
             client.chat_postMessage(
                 channel=dm_channel,
-                text=f"⏰ Standup is now closed ({close_hour}:{close_min:02d} deadline reached). Your response was not recorded. Please submit on time tomorrow!"
+                text=f"⏰ Standup is now closed ({close_hour}:{close_min:02d} deadline reached). Please submit on time tomorrow!"
             )
         except SlackApiError:
             pass
         post_did_not_submit(user_name, user_id)
         save_to_excel(user_name, [], did_not_submit=True)
-        with sessions_lock:
-            user_sessions.pop(user_id, None)
+    save_sessions({})
     print("Standup closed!")
 
 def send_standup_prompts():
     print(f"Sending standup prompts at {datetime.now(NPT).strftime('%H:%M NPT')}")
     allowed_names = get_allowed_names()
+    save_sessions({})
     try:
         result = client.users_list()
         sent_count = 0
@@ -172,19 +198,17 @@ def send_standup_prompts():
             if allowed_names:
                 user_name_check = user.get("real_name", user.get("name", "")).lower()
                 if user_name_check not in allowed_names:
-                    print(f"Skipping {user.get('real_name')} — not in allowed list")
                     continue
             user_id = user["id"]
             try:
                 dm = client.conversations_open(users=user_id)
                 dm_channel = dm["channel"]["id"]
-                with sessions_lock:
-                    user_sessions[user_id] = {
-                        "step": 0,
-                        "answers": [],
-                        "channel": dm_channel,
-                        "name": user.get("real_name", user.get("name", "Team member"))
-                    }
+                set_session(user_id, {
+                    "step": 0,
+                    "answers": [],
+                    "channel": dm_channel,
+                    "name": user.get("real_name", user.get("name", "Team member"))
+                })
                 client.chat_postMessage(
                     channel=dm_channel,
                     text=QUESTIONS[0]
@@ -208,24 +232,26 @@ def slack_events():
             user_id = event.get("user")
             text = event.get("text", "").strip()
             channel = event.get("channel")
-            with sessions_lock:
-                session = user_sessions.get(user_id)
+            session = get_session(user_id)
+            print(f"Event received from {user_id}, session: {session is not None}")
             if session and session["channel"] == channel:
-                with sessions_lock:
-                    session["answers"].append(text)
-                    session["step"] += 1
-                    current_step = session["step"]
-                    answers = list(session["answers"])
-                    user_name = session["name"]
+                session["answers"].append(text)
+                session["step"] += 1
+                current_step = session["step"]
+                answers = list(session["answers"])
+                user_name = session["name"]
                 if current_step < len(QUESTIONS):
+                    set_session(user_id, session)
                     try:
                         client.chat_postMessage(
                             channel=channel,
                             text=QUESTIONS[current_step]
                         )
+                        print(f"✅ Sent Q{current_step+1} to {user_name}")
                     except SlackApiError as e:
                         print(f"Error sending question: {e}")
                 else:
+                    delete_session(user_id)
                     try:
                         client.chat_postMessage(
                             channel=channel,
@@ -235,8 +261,7 @@ def slack_events():
                         pass
                     post_to_channel(user_name, user_id, answers)
                     save_to_excel(user_name, answers)
-                    with sessions_lock:
-                        user_sessions.pop(user_id, None)
+                    print(f"✅ Standup complete for {user_name}")
     return jsonify({"status": "ok"})
 
 @app.route("/", methods=["GET"])
@@ -244,14 +269,16 @@ def home():
     close_hour, close_min = get_close_time()
     allowed_names = get_allowed_names()
     members_info = f"{len(allowed_names)} specific members" if allowed_names else "ALL workspace members"
+    sessions = load_sessions()
     return (
         f"Dohoro Standup Bot is running! ☕<br><br>"
         f"Channel: #{CHANNEL_NAME}<br>"
         f"Standup opens: {STANDUP_HOUR}:{STANDUP_MINUTE:02d} NPT<br>"
         f"Standup closes: {close_hour}:{close_min:02d} NPT<br>"
         f"Window: {STANDUP_WINDOW_MINUTES} minutes<br>"
-        f"Members: {members_info}<br><br>"
-        f"Bot is alive and will never sleep! ✅"
+        f"Members: {members_info}<br>"
+        f"Active sessions: {len(sessions)}<br><br>"
+        f"Bot is alive! ✅"
     )
 
 @app.route("/members", methods=["GET"])
@@ -279,33 +306,25 @@ def manual_close():
 def start_scheduler():
     close_hour, close_min = get_close_time()
     scheduler = BackgroundScheduler(timezone=NPT)
-
-    # Send standup at configured time
     scheduler.add_job(
         send_standup_prompts, "cron",
         day_of_week="sun,mon,tue,wed,thu,fri",
         hour=STANDUP_HOUR, minute=STANDUP_MINUTE
     )
-
-    # Close standup after window
     scheduler.add_job(
         close_standup, "cron",
         day_of_week="sun,mon,tue,wed,thu,fri",
         hour=close_hour, minute=close_min
     )
-
-    # Keep alive ping every 5 minutes so bot never sleeps!
     scheduler.add_job(
         keep_alive, "interval", minutes=5
     )
-
     scheduler.start()
     print(f"✅ Scheduler started!")
     print(f"✅ Standup opens: {STANDUP_HOUR}:{STANDUP_MINUTE:02d} NPT")
     print(f"✅ Standup closes: {close_hour}:{close_min:02d} NPT")
     print(f"✅ Keep alive: every 5 minutes")
 
-# Start scheduler when app loads (works with gunicorn too)
 start_scheduler()
 
 if __name__ == "__main__":
