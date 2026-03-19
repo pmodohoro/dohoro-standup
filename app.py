@@ -167,6 +167,22 @@ def get_channel_id(channel_name):
         print(f"Error getting channel {channel_name}: {e}")
     return None
 
+def get_team_color(team_name):
+    colors = {
+        "dev": "#22c55e",
+        "qa": "#ef4444",
+        "uiux": "#7c3aed"
+    }
+    return colors.get(team_name.lower(), "#378ADD")
+
+def get_team_badge(team_name):
+    badges = {
+        "dev": "💻 DEV",
+        "qa": "🧪 QA",
+        "uiux": "🎨 UIUX"
+    }
+    return badges.get(team_name.lower(), team_name.upper())
+
 def post_to_channel(user_name, user_id, team_name, channel_name, answers, late=False):
     if not channel_name:
         print(f"No channel configured for {team_name} team!")
@@ -176,27 +192,62 @@ def post_to_channel(user_name, user_id, team_name, channel_name, answers, late=F
     if not channel_id:
         return
     blockers = answers[2] if answers[2].lower() != "none" else "-"
-    late_tag = " _(late submission)_" if late else ""
+    team_badge = get_team_badge(team_name)
+    team_color = get_team_color(team_name)
+    status_text = "⏰ Submitted late" if late else "✅ Submitted on time"
+    from datetime import datetime
+    now = datetime.now(NPT)
+    date_str = now.strftime("%B %d, %Y · %I:%M %p")
+
     try:
         client.chat_postMessage(
             channel=channel_id,
-            text=f"<@{user_id}> submitted standup *DOHORO-STANDUP* ☕☕☕{late_tag}",
-            blocks=[
+            text=f"{user_name} submitted standup - DOHORO-STANDUP ☕",
+            attachments=[
                 {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"<@{user_id}> submitted standup *DOHORO-STANDUP* ☕☕☕{late_tag}"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*What did you complete yesterday?*\n• {answers[0]}"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*What will you do today?*\n• {answers[1]}"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*Anything blocking your progress?*\n{blockers}"}
+                    "color": team_color,
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*<@{user_id}> submitted standup* ☕   `{team_badge}`   `{status_text}`"
+                            }
+                        },
+                        {
+                            "type": "divider"
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*✅ What did you complete yesterday?*\n{answers[0]}"
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*💻 What will you work on today?*\n{answers[1]}"
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*🚧 Anything blocking your progress?*\n{blockers}"
+                            }
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"DOHORO-STANDUP · {date_str}"
+                                }
+                            ]
+                        }
+                    ]
                 }
             ]
         )
