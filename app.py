@@ -20,7 +20,7 @@ STANDUP_HOUR = int(os.environ.get("STANDUP_HOUR", "7"))
 STANDUP_MINUTE = int(os.environ.get("STANDUP_MINUTE", "20"))
 STANDUP_WINDOW_MINUTES = int(os.environ.get("STANDUP_WINDOW", "30"))
 RENDER_URL = os.environ.get("RENDER_URL", "https://dohoro-standup.onrender.com")
-ADMIN_SLACK_ID = os.environ.get("ADMIN_SLACK_ID", "")
+ADMIN_SLACK_IDS = [i.strip() for i in os.environ.get("ADMIN_SLACK_ID", "").split(",") if i.strip()]
 
 # Teams
 TEAMS = {
@@ -112,17 +112,18 @@ def get_all_team_members():
     return all_members
 
 def notify_admin(message):
-    if not ADMIN_SLACK_ID:
+    if not ADMIN_SLACK_IDS:
         print(f"ADMIN ALERT: {message}")
         return
-    try:
-        dm = client.conversations_open(users=ADMIN_SLACK_ID)
-        client.chat_postMessage(
-            channel=dm["channel"]["id"],
-            text=f"🤖 *Dohoro Standup Alert*\n{message}"
-        )
-    except SlackApiError as e:
-        print(f"Could not notify admin: {e}")
+    for admin_id in ADMIN_SLACK_IDS:
+        try:
+            dm = client.conversations_open(users=admin_id)
+            client.chat_postMessage(
+                channel=dm["channel"]["id"],
+                text=f"🤖 *Dohoro Standup Alert*\n{message}"
+            )
+        except SlackApiError as e:
+            print(f"Could not notify admin {admin_id}: {e}")
 
 # ─── Excel ─────────────────────────────────────────────────────────────────────
 
