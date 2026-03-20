@@ -350,6 +350,38 @@ def slack_events():
             channel = event.get("channel")
             session = get_session(user_id)
             print(f"Event from {user_id}, session exists: {session is not None}")
+
+            # Option A: Reopen session for late submission if no active session
+            if not session:
+                member_map = get_all_team_members()
+                try:
+                    user_info = client.users_info(user=user_id)
+                    user_real_name = user_info["user"].get("real_name", "").lower()
+                    if user_real_name in member_map:
+                        team_name, team_channel = member_map[user_real_name]
+                        # Check if they already submitted today by checking if session was completed
+                        # Start fresh late session
+                        set_session(user_id, {
+                            "step": 0,
+                            "answers": [],
+                            "channel": channel,
+                            "name": user_info["user"].get("real_name", "Team member"),
+                            "team": team_name,
+                            "team_channel": team_channel,
+                            "late": True
+                        })
+                        session = get_session(user_id)
+                        try:
+                            client.chat_postMessage(
+                                channel=channel,
+                                text="⏰ Standup window has closed but we will still accept your submission as *late*. " + QUESTIONS[0]
+                            )
+                        except SlackApiError:
+                            pass
+                        return jsonify({"status": "ok"})
+                except SlackApiError:
+                    pass
+
             if session and session["channel"] == channel:
                 session["answers"].append(text)
                 session["step"] += 1
@@ -367,7 +399,7 @@ def slack_events():
                         print(f"Error sending Q{current_step+1}: {e}")
                 else:
                     delete_session(user_id)
-                    late = not is_standup_open()
+                    late = session.get("late", False) or not is_standup_open()
                     status = "Submitted late" if late else "Submitted"
                     try:
                         if late:
