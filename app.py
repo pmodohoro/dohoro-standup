@@ -36,6 +36,7 @@ QUESTIONS = [
 ]
 
 SESSIONS_FILE = "/tmp/sessions.json"
+SUBMITTED_FILE = "/tmp/submitted_today.json"
 EXCEL_LOCK = threading.Lock()
 SESSIONS_LOCK = threading.Lock()
 
@@ -54,6 +55,38 @@ def save_sessions(sessions):
             json.dump(sessions, f)
     except Exception as e:
         print(f"Error saving sessions: {e}")
+
+def load_submitted():
+    try:
+        with open(SUBMITTED_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_submitted(data):
+    try:
+        with open(SUBMITTED_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Error saving submitted: {e}")
+
+def mark_submitted(user_id, message_ts, channel_id, team_name, team_channel):
+    with SESSIONS_LOCK:
+        submitted = load_submitted()
+        submitted[user_id] = {
+            "message_ts": message_ts,
+            "channel_id": channel_id,
+            "team_name": team_name,
+            "team_channel": team_channel
+        }
+        save_submitted(submitted)
+
+def get_submitted(user_id):
+    with SESSIONS_LOCK:
+        return load_submitted().get(user_id)
+
+def clear_submitted():
+    save_submitted({})
 
 def get_session(user_id):
     with SESSIONS_LOCK:
@@ -167,6 +200,50 @@ def get_channel_id(channel_name):
         print(f"Error getting channel {channel_name}: {e}")
     return None
 
+def update_channel_message(user_name, user_id, team_name, channel_name, answers, message_ts, channel_id):
+    blockers = answers[2] if answers[2].lower() != "none" else "-"
+    team_badge = get_team_badge(team_name)
+    team_color = get_team_color(team_name)
+    now = datetime.now(NPT)
+    date_str = now.strftime("%B %d, %Y · %I:%M %p")
+    try:
+        client.chat_update(
+            channel=channel_id,
+            ts=message_ts,
+            text=f"{user_name} updated standup - DOHORO-STANDUP ☕",
+            attachments=[
+                {
+                    "color": team_color,
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"*<@{user_id}> submitted standup* ☕   `{team_badge}`   `✏️ Edited`"}
+                        },
+                        {"type": "divider"},
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"*✅ What did you complete yesterday?*\n{answers[0]}"}
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"*💻 What will you work on today?*\n{answers[1]}"}
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"*🚧 Anything blocking your progress?*\n{blockers}"}
+                        },
+                        {
+                            "type": "context",
+                            "elements": [{"type": "mrkdwn", "text": f"DOHORO-STANDUP · {date_str} _(edited)_"}]
+                        }
+                    ]
+                }
+            ]
+        )
+        print(f"✅ Updated message for {user_name} ({team_name})")
+    except SlackApiError as e:
+        print(f"Error updating message: {e}")
+
 def get_team_color(team_name):
     colors = {
         "dev": "#22c55e",
@@ -200,7 +277,7 @@ def post_to_channel(user_name, user_id, team_name, channel_name, answers, late=F
     date_str = now.strftime("%B %d, %Y · %I:%M %p")
 
     try:
-        client.chat_postMessage(
+        response = client.chat_postMessage(
             channel=channel_id,
             text=f"{user_name} submitted standup - DOHORO-STANDUP ☕",
             attachments=[
@@ -251,10 +328,13 @@ def post_to_channel(user_name, user_id, team_name, channel_name, answers, late=F
                 }
             ]
         )
+        message_ts = response.get("ts")
         print(f"✅ Posted {user_name} ({team_name}) to #{channel_name}{' [LATE]' if late else ''}")
+        return message_ts, channel_id
     except SlackApiError as e:
         print(f"Error posting to #{channel_name}: {e}")
         notify_admin(f"⚠️ Failed to post {user_name}'s standup to `#{channel_name}`: {e}")
+    return None, None
 
 def post_did_not_submit(user_name, user_id, channel_name):
     if not channel_name:
@@ -296,6 +376,7 @@ def close_standup():
 def send_standup_prompts():
     print(f"Sending standup prompts at {datetime.now(NPT).strftime('%H:%M NPT')}")
     save_sessions({})
+    clear_submitted()
     member_map = get_all_team_members()
     if not member_map:
         print("No team members configured!")
@@ -350,6 +431,40 @@ def slack_events():
             channel = event.get("channel")
             session = get_session(user_id)
             print(f"Event from {user_id}, session exists: {session is not None}")
+
+            # Edit command detection
+            if not session and text.lower().strip() in ["edit", "edit standup", "change", "update"]:
+                submitted = get_submitted(user_id)
+                if submitted:
+                    set_session(user_id, {
+                        "step": 0,
+                        "answers": [],
+                        "channel": channel,
+                        "name": user_id,
+                        "team": submitted["team_name"],
+                        "team_channel": submitted["team_channel"],
+                        "late": False,
+                        "editing": True,
+                        "edit_ts": submitted["message_ts"],
+                        "edit_channel_id": submitted["channel_id"]
+                    })
+                    try:
+                        client.chat_postMessage(
+                            channel=channel,
+                            text="✏️ No problem! Let us update your standup. " + QUESTIONS[0]
+                        )
+                    except SlackApiError:
+                        pass
+                    return jsonify({"status": "ok"})
+                else:
+                    try:
+                        client.chat_postMessage(
+                            channel=channel,
+                            text="❌ You have not submitted a standup today yet. Please submit first!"
+                        )
+                    except SlackApiError:
+                        pass
+                    return jsonify({"status": "ok"})
 
             # Option A: Reopen session for late submission if no active session
             if not session:
