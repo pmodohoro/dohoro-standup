@@ -420,7 +420,14 @@ def send_standup_prompts():
 
 @app.route("/slack/events", methods=["POST"])
 def slack_events():
+    # Ignore Slack retry attempts to prevent duplicate questions
+    if request.headers.get("X-Slack-Retry-Num"):
+        return jsonify({"status": "ok"})
+
     data = request.json
+    if not data:
+        return jsonify({"status": "ok"})
+
     if "challenge" in data:
         return jsonify({"challenge": data["challenge"]})
     if "event" in data:
@@ -496,6 +503,9 @@ def slack_events():
                         return jsonify({"status": "ok"})
                 except SlackApiError:
                     pass
+
+            if not user_id:
+                return jsonify({"status": "ok"})
 
             if session and session["channel"] == channel:
                 session["answers"].append(text)
