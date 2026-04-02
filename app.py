@@ -132,7 +132,7 @@ def get_all_sessions():
 
 def keep_alive():
     try:
-        requests.get(RENDER_URL, timeout=10)
+        response = requests.get(RENDER_URL + "/ping", timeout=10)
         print(f"✅ Keep alive at {datetime.now(NPT).strftime('%H:%M NPT')}")
     except Exception as e:
         print(f"Keep alive failed: {e}")
@@ -580,6 +580,10 @@ def slack_events():
 
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
+@app.route("/ping", methods=["GET"])
+def ping():
+    return "pong", 200
+
 @app.route("/", methods=["GET"])
 def home():
     close_hour, close_min = get_close_time()
@@ -669,9 +673,12 @@ def start_scheduler():
     print(f"✅ Standup closes: {close_hour}:{close_min:02d} NPT")
     print(f"✅ Keep alive: every 5 minutes")
 
+_scheduler_started = False
+
 def initialize():
-    if not os.environ.get("SCHEDULER_STARTED"):
-        os.environ["SCHEDULER_STARTED"] = "1"
+    global _scheduler_started
+    if not _scheduler_started:
+        _scheduler_started = True
         start_scheduler()
 
 initialize()
