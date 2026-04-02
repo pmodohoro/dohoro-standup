@@ -117,6 +117,7 @@ def set_session(user_id, data):
         sessions = load_sessions()
         sessions[user_id] = data
         save_sessions(sessions)
+        print(f"Session saved for {user_id}: step={data.get('step', 0)}")
 
 def delete_session(user_id):
     with SESSIONS_LOCK:
@@ -131,11 +132,7 @@ def get_all_sessions():
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def keep_alive():
-    try:
-        response = requests.get(RENDER_URL + "/ping", timeout=10)
-        print(f"✅ Keep alive at {datetime.now(NPT).strftime('%H:%M NPT')}")
-    except Exception as e:
-        print(f"Keep alive failed: {e}")
+    print(f"✅ Keep alive at {datetime.now(NPT).strftime('%H:%M NPT')}")
 
 def get_close_time():
     close_min = STANDUP_MINUTE + STANDUP_WINDOW_MINUTES
