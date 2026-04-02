@@ -483,7 +483,7 @@ def slack_events():
                             "name": user_info["user"].get("real_name", "Team member"),
                             "team": team_name,
                             "team_channel": team_channel,
-                            "late": True
+                            "late": not is_standup_open()
                         })
                         session = get_session(user_id)
                         try:
