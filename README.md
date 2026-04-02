@@ -182,7 +182,7 @@ Download links:
 ## Current Team Setup
 
 ### DEV team → #standup-wpx-dev
-Suraj Pahari, Sujan Thapa, Sangam Giri, Samir Karki, Sajan Adhikari, Rupesh Acharya, Nishan Bishwokarma, Hem Pun, Dikshyant Aryal
+Suraj Pahari, Sujan Thapa, Sangam Giri, Samir Karki, Sajan Adhikari, Rupesh Acharya, Nishan Bishwokarma, Hem Pun, Dikshyant Aryal,Arjun Adhikari
 
 ### QA team → #standup-qa
 Amrita Shrestha, Kabita Banstola, Dikshyant Adhikari
