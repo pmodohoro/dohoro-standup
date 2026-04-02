@@ -37,6 +37,7 @@ QUESTIONS = [
 
 SESSIONS_FILE = "/tmp/sessions.json"
 SUBMITTED_FILE = "/tmp/submitted_today.json"
+PROCESSED_EVENTS_FILE = "/tmp/processed_events.json"
 EXCEL_LOCK = threading.Lock()
 SESSIONS_LOCK = threading.Lock()
 
@@ -87,6 +88,25 @@ def get_submitted(user_id):
 
 def clear_submitted():
     save_submitted({})
+
+def load_processed_events():
+    try:
+        with open(PROCESSED_EVENTS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def mark_event_processed(event_id):
+    with SESSIONS_LOCK:
+        events = load_processed_events()
+        events.append(event_id)
+        if len(events) > 500:
+            events = events[-500:]
+        try:
+            with open(PROCESSED_EVENTS_FILE, "w") as f:
+                json.dump(events, f)
+        except Exception as e:
+            print(f"Error saving processed events: {e}")
 
 def get_session(user_id):
     with SESSIONS_LOCK:
@@ -375,8 +395,13 @@ def close_standup():
 
 def send_standup_prompts():
     print(f"Sending standup prompts at {datetime.now(NPT).strftime('%H:%M NPT')}")
-    save_sessions({})
-    clear_submitted()
+    # Only clear sessions if no active sessions — prevents wiping mid-session answers
+    existing = load_sessions()
+    if not existing:
+        save_sessions({})
+        clear_submitted()
+    else:
+        print(f"⚠️ {len(existing)} active sessions found — not clearing")
     member_map = get_all_team_members()
     if not member_map:
         print("No team members configured!")
@@ -424,12 +449,21 @@ def slack_events():
     if request.headers.get("X-Slack-Retry-Num"):
         return jsonify({"status": "ok"})
 
+    # Return 200 immediately to prevent Slack retries
     data = request.json
     if not data:
         return jsonify({"status": "ok"})
 
     if "challenge" in data:
         return jsonify({"challenge": data["challenge"]})
+
+    # Deduplicate events using event_id
+    event_id = data.get("event_id", "")
+    if event_id:
+        processed = load_processed_events()
+        if event_id in processed:
+            return jsonify({"status": "ok"})
+        mark_event_processed(event_id)
     if "event" in data:
         event = data["event"]
         if event.get("type") == "message" and not event.get("bot_id"):
