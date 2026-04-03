@@ -653,6 +653,20 @@ def manual_close():
 def start_scheduler():
     close_hour, close_min = get_close_time()
     scheduler = BackgroundScheduler(timezone=NPT)
+    # Warm up job 5 minutes before standup to ensure bot is awake
+    warmup_minute = STANDUP_MINUTE - 5
+    warmup_hour = STANDUP_HOUR
+    if warmup_minute < 0:
+        warmup_minute += 60
+        warmup_hour -= 1
+
+    scheduler.add_job(
+        lambda: print(f"🔥 Bot warming up at {datetime.now(NPT).strftime('%H:%M NPT')} — ready for standup!"),
+        "cron",
+        day_of_week="sun,mon,tue,wed,thu,fri",
+        hour=warmup_hour, minute=warmup_minute
+    )
+
     scheduler.add_job(
         send_standup_prompts, "cron",
         day_of_week="sun,mon,tue,wed,thu,fri",
