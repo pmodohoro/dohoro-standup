@@ -373,7 +373,12 @@ def close_standup():
     close_hour, close_min = get_close_time()
     print(f"Closing standup at {close_hour}:{close_min:02d} NPT")
     sessions = get_all_sessions()
+    submitted = load_submitted()
     for user_id, session in sessions.items():
+        # Skip if user already submitted
+        if user_id in submitted:
+            print(f"Skipping {session['name']} — already submitted")
+            continue
         user_name = session["name"]
         dm_channel = session["channel"]
         team_name = session.get("team", "unknown")
