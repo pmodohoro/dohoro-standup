@@ -469,9 +469,34 @@ def slack_events():
     if "event" in data:
         event = data["event"]
         if event.get("type") == "message" and not event.get("bot_id"):
+            # Ignore edited/deleted messages and other subtypes
+            if event.get("subtype"):
+                return jsonify({"status": "ok"})
+
             user_id = event.get("user")
             text = event.get("text", "").strip()
             channel = event.get("channel")
+
+            # Ignore empty messages and file uploads
+            if not text:
+                # Check if it is a file upload
+                if event.get("files") or event.get("attachments"):
+                    try:
+                        dm = event.get("channel")
+                        if dm:
+                            client.chat_postMessage(
+                                channel=dm,
+                                text="Please reply with text only — files and images are not supported for standup answers. 🙏"
+                            )
+                    except:
+                        pass
+                return jsonify({"status": "ok"})
+            # Only process Direct Messages (im) — ignore ALL channel messages
+            # channel_type values: im=DM, group=private channel, channel=public channel
+            channel_type = event.get("channel_type", "")
+            if channel_type != "im":
+                return jsonify({"status": "ok"})
+
             session = get_session(user_id)
             print(f"Event from {user_id}, session exists: {session is not None}")
 
@@ -544,7 +569,8 @@ def slack_events():
                 return jsonify({"status": "ok"})
 
             if session and session["channel"] == channel:
-                session["answers"].append(text)
+                # Truncate very long answers to 1000 chars
+                session["answers"].append(text[:1000] if len(text) > 1000 else text)
                 session["step"] += 1
                 current_step = session["step"]
                 answers = list(session["answers"])
@@ -559,6 +585,9 @@ def slack_events():
                     except SlackApiError as e:
                         print(f"Error sending Q{current_step+1}: {e}")
                 else:
+                    # Mark as submitted FIRST before deleting session
+                    # This prevents Option A from restarting standup on next message
+                    mark_submitted(user_id, "pending", "pending", team_name, team_channel)
                     delete_session(user_id)
                     late = session.get("late", False) or not is_standup_open()
                     status = "Submitted late" if late else "Submitted"
@@ -566,12 +595,12 @@ def slack_events():
                         if late:
                             client.chat_postMessage(
                                 channel=channel,
-                                text="✅ *Thank you! Your standup has been submitted!* 🚀\n_(Note: This was submitted after the deadline but has been recorded as late.)_"
+                                text="✅ *Thank you! Your standup has been submitted!* 🚀\n_(submitted late)_\n\n💡 Made a mistake? Type *edit* here to update your answers anytime."
                             )
                         else:
                             client.chat_postMessage(
                                 channel=channel,
-                                text="✅ *Thank you! Your standup has been submitted!* 🚀\nHave a productive day! 💪"
+                                text="✅ *Thank you! Your standup has been submitted!* 🚀\nHave a productive day! 💪\n\n💡 Made a mistake? Type *edit* here to update your answers anytime."
                             )
                     except SlackApiError:
                         pass
